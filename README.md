@@ -1,4 +1,5 @@
 # ✍️ AI Smartboard: Touchpad Handwriting Auto-Designer
+visit: https://smartboard-smoky.vercel.app
 
 An interactive, web-based digital smartboard engineered specifically for laptop trackpads and touchpads. Writing on a standard trackpad with a finger naturally results in jagged, messy lines. This application captures those raw coordinate paths, routes them through a native handwriting recognition engine, and instantly substitutes the scribbles with clean, beautiful, formatted typography precisely where you drew it.
 
