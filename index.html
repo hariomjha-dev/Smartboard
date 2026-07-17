@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Smartboard - Auto-Correct with Undo/Redo</title>
+    <!-- Google Fonts for beautiful handwriting typography -->
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=Dancing+Script:wght@600&family=Playfair+Display:ital,wght@1,500&family=Shadows+Into+Light&display=swap" rel="stylesheet">
+    
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            background-color: #f1f5f9;
+            overflow: hidden;
+        }
+
+        /* Toolbar Top Settings */
+        #toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            align-items: center;
+            background-color: #ffffff;
+            padding: 12px 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            z-index: 10;
+        }
+
+        .tool-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-right: 2px solid #f1f5f9;
+            padding-right: 15px;
+        }
+
+        .tool-group:last-child {
+            border-right: none;
+        }
+
+        label {
+            font-size: 11px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+        }
+
+        select, input[type="color"], button {
+            padding: 8px 14px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background: #fff;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            background-color: #f8fafc;
+            border-color: #94a3b8;
+        }
+
+        button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .status-badge {
+            background-color: #dcfce7;
+            color: #15803d;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        /* Smartboard Grid Layout Container */
+        #board-container {
+            flex-grow: 1;
+            position: relative;
+            background-color: #ffffff;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="3"><circle cx="12" cy="12" r="10"/></svg>') 8 8, crosshair;
+        }
+
+        /* Auto-designed Typography Elements */
+        .corrected-text {
+            position: absolute;
+            background: transparent;
+            border: 1px dashed transparent;
+            padding: 4px;
+            white-space: nowrap;
+            cursor: move;
+            user-select: none;
+        }
+
+        .corrected-text:hover {
+            border-color: #3b82f6;
+            background-color: rgba(219, 234, 254, 0.3);
+        }
+
+        /* Screen HUD overlay info */
+        #hud {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 23, 42, 0.85);
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-size: 13px;
+            pointer-events: none;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Upper Control System -->
+    <div id="toolbar">
+        <div class="tool-group">
+            <span class="status-badge">✨ Auto-Correct Live</span>
+        </div>
+
+        <!-- History controls -->
+        <div class="tool-group">
+            <button id="btn-undo" onclick="undo()" title="Undo (Ctrl+Z)">↩️ Undo</button>
+            <button id="btn-redo" onclick="redo()" title="Redo (Ctrl+Y)">↪️ Redo</button>
+        </div>
+
+        <div class="tool-group">
+            <label for="fontStyle">Font Designer:</label>
+            <select id="fontStyle">
+                <option value="'Caveat', cursive">✍️ Casual Handwriting</option>
+                <option value="'Dancing Script', cursive">🎨 Calligraphy</option>
+                <option value="'Playfair Display', serif">📜 Serif Script</option>
+                <option value="'Shadows Into Light', cursive">✏️ Architect Blueprint</option>
+            </select>
+        </div>
+
+        <div class="tool-group">
+            <label for="textColor">Ink Color:</label>
+            <input type="color" id="textColor" value="#1e3a8a">
+
+            <label for="textSize">Size:</label>
+            <select id="textSize">
+                <option value="32">Small (32px)</option>
+                <option value="44" selected>Medium (44px)</option>
+                <option value="60">Large (60px)</option>
+                <option value="80">Heading (80px)</option>
+            </select>
+        </div>
+
+        <div class="tool-group">
+            <button onclick="clearAll()" style="color: #ef4444; border-color: #fca5a5;">🗑️ Reset All</button>
+        </div>
+    </div>
+
+    <!-- Main Active Space -->
+    <div id="board-container">
+        <canvas id="paintCanvas"></canvas>
+        <div id="hud">Write on your touchpad, then pause for 1.2 seconds to clean handwriting. Keyboard shortcuts (Ctrl+Z / Ctrl+Y) active.</div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('paintCanvas');
+        const ctx = canvas.getContext('2d');
+        const container = document.getElementById('board-container');
+        
+        let isDrawing = false;
+        let strokeData = [];
+        let allStrokes = [];
+        let recognitionTimeout;
+        
+        let minX = Infinity, maxX = 0, minY = Infinity, maxY = 0;
+
+        // Undo/Redo Engine State Stack
+        let undoStack = [];
+        let redoStack = [];
+
+        function initCanvas() {
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = '#64748b';
+            redrawCanvasFromHistory(); // Redraw ink tracks if screen scales
+        }
+        window.addEventListener('resize', initCanvas);
+        window.addEventListener('load', initCanvas);
+
+        // Capture touchpad actions
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            clearTimeout(recognitionTimeout);
+            
+            const x = e.clientX - container.offsetLeft;
+            const y = e.clientY - container.offsetTop;
+            
+            strokeData = [[x, y, Date.now()]];
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            
+            updateBounds(x, y);
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (!isDrawing) return;
+            const x = e.clientX - container.offsetLeft;
+            const y = e.clientY - container.offsetTop;
+            
+            strokeData.push([x, y, Date.now()]);
+            ctx.lineTo(x, y);
+            ctx.stroke();
+            
+            updateBounds(x, y);
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            if (!isDrawing) return;
+            isDrawing = false;
+            
+            if (strokeData.length > 0) {
+                const xCoords = strokeData.map(p => p[0]);
+                const yCoords = strokeData.map(p => p[1]);
+                const times = strokeData.map(p => p[2] - strokeData[0][2]);
+                allStrokes.push([xCoords, yCoords, times]);
+            }
+
+            document.getElementById('hud').innerText = "Analyzing trackpad handwriting... ⏳";
+            recognitionTimeout = setTimeout(convertHandwriting, 1200);
+        });
+
+        function updateBounds(x, y) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+        }
+
+        // Connection to handwriting text extraction engine
+        function convertHandwriting() {
+            if (allStrokes.length === 0) return;
+
+            const requestBody = {
+                "options": "enable_pre_space",
+                "requests": [{
+                    "writing_guide": { "width": canvas.width, "height": canvas.height },
+                    "pre_context": "",
+                    "max_num_results": 1,
+                    "max_completions": 0,
+                    "language": "en",
+                    "ink": allStrokes
+                }]
+            };
+
+            fetch('https://www.google.com/inputtools/request?ime=handwriting&app=mobilesearch&cs=1', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(requestBody)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data[0] === "SUCCESS" && data[1][0][1].length > 0) {
+                    const cleanTextResult = data[1][0][1][0];
+                    
+                    // Create History Object configuration for this layout action
+                    const textAction = {
+                        id: 'text_' + Date.now(),
+                        type: 'text',
+                        text: cleanTextResult,
+                        font: document.getElementById('fontStyle').value,
+                        color: document.getElementById('textColor').value,
+                        size: document.getElementById('textSize').value,
+                        x: minX,
+                        y: minY - 10
+                    };
+                    
+                    // Add text design step to primary track stack history
+                    pushAction(textAction);
+                } else {
+                    document.getElementById('hud').innerText = "Handwriting unrecognized. Try again clearer!";
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                document.getElementById('hud').innerText = "Network Error matching ink.";
+            })
+            .finally(() => {
+                allStrokes = [];
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                minX = Infinity; maxX = 0; minY = Infinity; maxY = 0;
+            });
+        }
+
+        // Push new action to history stack and drop old redos
+        function pushAction(action) {
+            undoStack.push(action);
+            redoStack = []; // Clear redo stack on new action
+            updateWorkspace();
+        }
+
+        // Apply visual updates to canvas and document layouts based on history stack lists
+        function updateWorkspace() {
+            // Remove all custom elements rendered currently
+            document.querySelectorAll('.corrected-text').forEach(el => el.remove());
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Rebuild elements from history lists
+            undoStack.forEach(action => {
+                if (action.type === 'text') {
+                    renderTextElement(action);
+                }
+            });
+
+            // Handle button toggle states
+            document.getElementById('btn-undo').disabled = undoStack.length === 0;
+            document.getElementById('btn-redo').disabled = redoStack.length === 0;
+            document.getElementById('hud').innerText = "Smartboard history synchronized.";
+        }
+
+        function renderTextElement(action) {
+            const div = document.createElement('div');
+            div.className = 'corrected-text';
+            div.id = action.id;
+            div.innerText = action.text;
+            div.style.fontFamily = action.font;
+            div.style.color = action.color;
+            div.style.fontSize = action.size + 'px';
+            div.style.left = `${action.x}px`;
+            div.style.top = `${action.y}px`;
+
+            makeElementDraggable(div, action);
+            container.appendChild(div);
+        }
+
+        // History navigation executions
+        function undo() {
+            if (undoStack.length === 0) return;
+            const action = undoStack.pop();
+            redoStack.push(action);
+            updateWorkspace();
+        }
+
+        function redo() {
+            if (redoStack.length === 0) return;
+            const action = redoStack.pop();
+            undoStack.push(action);
+            updateWorkspace();
+        }
+
+        // Hook Laptop/PC keyboard shortcuts (Ctrl+Z and Ctrl+Y)
+        window.addEventListener('keydown', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key.toLowerCase() === 'z') {
+                    e.preventDefault();
+                    undo();
+                } else if (e.key.toLowerCase() === 'y') {
+                    e.preventDefault();
+                    redo();
+                }
+            }
+        });
+
+        // Track and coordinate dynamic positions when objects move
+        function makeElementDraggable(element, actionConfig) {
+            let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+            element.onmousedown = (e) => {
+                e.preventDefault();
+                pos3 = e.clientX;
+                pos4 = e.clientY;
+                document.onmouseup = () => {
+                    document.onmouseup = null;
+                    document.onmousemove = null;
+                    // Update final coordinate data on the history instance configuration object
+                    actionConfig.x = parseInt(element.style.left);
+                    actionConfig.y = parseInt(element.style.top);
+                };
+                document.onmousemove = (e) => {
+                    e.preventDefault();
+                    pos1 = pos3 - e.clientX;
+                    pos2 = pos4 - e.clientY;
+                    pos3 = e.clientX;
+                    pos4 = e.clientY;
+                    element.style.top = (element.offsetTop - pos2) + "px";
+                    element.style.left = (element.offsetLeft - pos1) + "px";
+                };
+            };
+        }
+
+        function clearAll() {
+            if(confirm("Are you sure you want to completely clear the board?")) {
+                undoStack = [];
+                redoStack = [];
+                updateWorkspace();
+                document.getElementById('hud').innerText = "Smartboard reset complete.";
+            }
+        }
+    </script>
+</body>
+</html>
